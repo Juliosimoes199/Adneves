@@ -1,126 +1,318 @@
+import requests
+import datetime
+import asyncio
 import streamlit as st
-import google.generativeai as genai
-import json
+from google.adk.agents import Agent
+from google.adk.sessions import InMemorySessionService # Para protótipo, usar persistente em prod
+from google.adk.runners import Runner
+from google.genai import types
 import os
+from dotenv import load_dotenv
+import google.generativeai as genai
+import warnings
+import logging
 
 
-# --- Informações do Serviço ---
-info_servico = "Temos os seguintes serviços: personalização de t-shirt, personalização de panfleto, cópia preto e branco, cópia a cor, criação de toper, foto rápida, impressão de documento."
+# --- Configurações Iniciais ---
+load_dotenv()
+api_key = os.getenv("GOOGLE_API_KEY")
 
-# --- Instruções do Sistema/Persona ---
-SYSTEM_INSTRUCTION = f"""
-Você é um especialista em design gráfico e atendimento ao cliente da empresa 'Adneves', localizada no Rocha Pinto. Seu principal objetivo é coletar todas as informações detalhadas que o cliente deseja para personalizar nossos serviços, garantindo a sua satisfação e fornecendo um atendimento personalizado e agradável.
+if api_key:
+    genai.configure(api_key=api_key)
+else:
+    st.warning("AVISO: GOOGLE_API_KEY não encontrada no ambiente. Por favor, defina-a ou codifique-a para teste.")
+    genai.configure(api_key="YOUR_HARDCODED_API_KEY_HERE") # CUIDADO: Nunca em produção
 
-Nossos serviços incluem: {info_servico}.
+os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "False"
+warnings.filterwarnings("ignore")
+logging.basicConfig(level=logging.ERROR)
+print("Bibliotecas importadas e GenAI configurado.")
 
-Siga estas diretrizes RIGOROSAMENTE:
-1.  **Apresentação:** Comece sempre se apresentando como um especialista da Adneves, seu nome é Neves AI.
-2.  **Personalização (T-shirt e Panfleto):** Se o cliente demonstrar interesse em **personalização de t-shirt** ou **panfleto**, peça todas as informações necessárias e detalhadas para a personalização e a quantidade desejada do produto. Seja EXTREMAMENTE específico sobre cores, imagens, textos, estilo, fontes, layout, tamanho da arte, local de aplicação (frente, costas, mangas para t-shirt), e a **quantidade exata** desejada para cada item.
-3.  **Incentivo e Diferenciais:** Se o cliente estiver confuso ou hesitante, enfatize os diferenciais da Adneves:
-    * Experiência dos profissionais altamente qualificados.
-    * Qualidade dos produtos (ex: tecidos duráveis para t-shirts).
-    * Atendimento personalizado focado nas necessidades individuais.
-    Incentive a personalização.
-4.  **Coleta de Dados para Agendamento:** Se o cliente expressar o desejo de aderir a um serviço de personalização (t-shirt ou panfleto), colete **nome completo** (primeiro e último nome), **tipo de serviço** e a **descrição detalhada da personalização** (todos os detalhes mencionados no ponto 2).
-5.  **Confirmação da Personalização:** Continue coletando informações detalhadas até que o cliente **confirme explicitamente** que está **totalmente satisfeito** e que **não falta adicionar mais nenhum detalhe**. SOMENTE APÓS ESSA CONFIRMAÇÃO, confirme a personalização com uma mensagem clara e de agradecimento.
-6.  **Outras Perguntas:** Ofereça-se para responder a outras perguntas sobre os serviços ou a localização da Adneves.
-7.  **Tom:** Seja sempre amigável, informativo e prestativo.\n"""
-SYSTEM_INSTRUCTION += """
-8.  **Formato de Saída JSON:** Ao final da interação, ou sempre que for relevante para a próxima etapa da conversa (por exemplo, quando as informações essenciais estiverem sendo coletadas ou confirmadas), você deve retornar um dicionário JSON com as informações coletadas. Se uma informação não estiver presente, retorne "null".
-    ```json
-    {
-        "nome": "null",
-        "servico": "null",
-        "quantidade": "null",
-        "descricao": "null",
-        "servico_agendado": "null"
+MODEL_GEMINI_2_0_FLASH = "gemini-2.0-flash-exp"
+
+url = "https://agendas-adilson-default-rtdb.firebaseio.com/"
+
+# --- Funções de Gerenciamento de Notas ---
+
+def criar_nota(titulo:str, descricao:str, data:str) -> str:
+    """
+    Cria uma nota no banco de dados Firebase.
+    Args:
+        titulo (str): Título da nota.
+        descricao (str): Descrição da nota.
+        data (str): Data da tarefa no formato "DD-MM", "Amanhã" ou "Hoje".
+    Returns:
+        str: Mensagem de sucesso ou erro.
+    """
+    data_criacao = datetime.datetime.now()
+    nota = {
+        "titulo": titulo,
+        "descricao": descricao,
+        "data": data,
+        "status": "Pendente",
+        "data_criacao": data_criacao.strftime("%Y-%m-%d %H:%M:%S") # Formato completo para data_criacao
     }
-    ```
-    * **nome:** Nome completo do cliente.
-    * **servico:** Tipo de serviço de personalização (ex: "personalização de t-shirt", "personalização de panfleto").
-    * **quantidade:** A quantidade desejada do produto.
-    * **descricao:** Todos os detalhes específicos da personalização.
-    * **servico_agendado:** `true` se o cliente confirmar que todos os detalhes estão corretos e completos; `false` caso contrário.
-9.  **Tópicos Fora de Serviço:** Se a pergunta do cliente não estiver relacionada a nenhum dos serviços da Adneves, responda educadamente que você pode ajudar com informações sobre nossos serviços.
-
-Lembre-se: seu objetivo é garantir que a personalização atenda exatamente às expectativas do cliente.
-"""
-
-# Configurar o Gemini uma única vez
-genai.configure(api_key="AIzaSyArTog-quWD9Tqf-CkkFAq_-UOZfK1FTtA")
-
-# --- Gerenciamento de Estado do Streamlit ---
-if "model" not in st.session_state:
-    st.session_state.model = genai.GenerativeModel(
-        'gemini-1.5-flash',
-        system_instruction=SYSTEM_INSTRUCTION
-    )
-
-if "chat" not in st.session_state:
-    st.session_state.chat = st.session_state.model.start_chat(history=[])
-
-
-# --- Função para Enviar Mensagens ao Gemini ---
-def send_message_to_gemini(user_message):
     try:
-        response = st.session_state.chat.send_message(
-            user_message,
-            generation_config=genai.types.GenerationConfig(temperature=0.7)
-        )
-        
-        # O chat.history é automaticamente atualizado pela API
-        max_history_length = 20
-        if len(st.session_state.chat.history) > max_history_length:
-            st.session_state.chat.history = st.session_state.chat.history[-max_history_length:]
-        
-        return response.text
-    except Exception as e:
-        st.error(f"Ocorreu um erro ao comunicar com o Gemini: {e}")
-        return "Desculpe, houve um problema. Por favor, tente novamente."
+        requisicao = requests.post(url + ".json", json=nota)
+        if requisicao.status_code == 200:
+            return "Nota criada com sucesso!"
+        else:
+            return f"Erro ao criar nota: {requisicao.status_code} - {requisicao.text}"
+    except requests.exceptions.RequestException as e:
+        return f"Ocorreu um erro de conexão ao criar a nota: {e}"
 
-# --- Interface Streamlit ---
-st.set_page_config(page_title="Adneves Design Gráfico", page_icon="🎨")
+def listar_notas() -> dict:
+    """
+    Lista todas as notas do banco de dados Firebase.
+    Returns:
+        dict: Dicionário contendo todas as notas ou None em caso de erro.
+    """
+    try:
+        requisicao = requests.get(url + ".json")
+        if requisicao.status_code == 200:
+            return requisicao.json()
+        else:
+            print(f"Erro ao listar notas: {requisicao.status_code} - {requisicao.text}")
+            return None
+    except requests.exceptions.RequestException as e:
+        print(f"Ocorreu um erro de conexão ao listar as notas: {e}")
+        return None
+    
+def exibir_notas() -> str:
+    """
+    Lista todas as notas e as formata em uma string legível.
+    Returns:
+        str: Uma string formatada com todas as notas ou uma mensagem de "nenhuma nota encontrada".
+    """
+    notas = listar_notas()
+    if notas:
+        output = "--- SUAS NOTAS ---\n"
+        for id_nota, detalhes in notas.items():
+            titulo = detalhes.get('titulo', 'N/A')
+            descricao = detalhes.get('descricao', 'N/A')
+            data = detalhes.get('data', 'N/A')
+            status = detalhes.get('status', 'N/A')
+            data_criacao = detalhes.get('data_criacao', 'N/A')
+            
+            output += f"ID: {id_nota}\n"
+            output += f"  Título: {titulo}\n"
+            output += f"  Descrição: {descricao}\n"
+            output += f"  Data da Tarefa: {data}\n"
+            output += f"  Status: {status}\n"
+            output += f"  Criado em: {data_criacao}\n"
+            output += "--------------------\n"
+        return output
+    else:
+        return "Nenhuma nota encontrada."
 
-st.title("🎨 Adneves Design Gráfico - Assistente de Personalização")
-st.markdown("Olá! Sou o especialista da Adneves, localizado no Rocha Pinto, e estou aqui para ajudar você a personalizar seus sonhos em design gráfico. Qual serviço você procura hoje?")
+def atualizar_campo_tarefa(id_usuario:str, campo:str, novo_valor:str) -> str:
+    """
+    Atualiza um único campo de uma tarefa usando PATCH.
+    Args:
+        id_usuario (str): O ID da nota a ser atualizada.
+        campo (str): O nome do campo a ser atualizado (ex: 'titulo', 'descricao', 'status', 'data').
+        novo_valor: O novo valor para o campo.
+    Returns:
+        str: Mensagem de sucesso ou erro.
+    """
+    url_nova = f"{url}{id_usuario}.json"
+    dados_para_atualizar = {campo: novo_valor}
 
-# Exibir o histórico da conversa
-for message in st.session_state.chat.history:
-    role = "user" if message.role == 'user' else "assistant"
-    with st.chat_message(role):
-        # Itera sobre as partes da mensagem.
-        # Para mensagens de texto, 'part' será uma string.
-        for part in message.parts:
-            # Verifica se a 'part' é diretamente uma string ou se tem um atributo 'text'
-            if isinstance(part, str):
-                content = part
-            elif hasattr(part, 'text'): # Verifica se a parte tem um atributo 'text' (como TextPart ou similar)
-                content = part.text
-            else: # Para outros tipos de conteúdo, converte para string
-                content = str(part)
+    try:
+        response = requests.patch(url_nova, json=dados_para_atualizar)
+        if response.status_code == 200:
+            return f"Campo '{campo}' da tarefa '{id_usuario}' atualizado para '{novo_valor}' com sucesso!"
+        elif response.status_code == 204:
+            return f"Campo '{campo}' da tarefa '{id_usuario}' atualizado para '{novo_valor}' com sucesso! (Sem conteúdo na resposta)"
+        else:
+            return f"Erro ao atualizar o campo '{campo}' da tarefa '{id_usuario}'. Status: {response.status_code}, Detalhes: {response.text}"
+    except requests.exceptions.RequestException as e:
+        return f"Ocorreu um erro de conexão: {e}"
 
-            # Tenta parsear a resposta do modelo como JSON
-            if role == "assistant":
-                try:
-                    # Verifica se o conteúdo parece ser um JSON antes de tentar parsear
-                    # (começa com '{' e termina com '}' e tem pelo menos alguns caracteres no meio)
-                    if content.strip().startswith('{') and content.strip().endswith('}') and len(content.strip()) > 2:
-                        resposta_json = json.loads(content)
-                        st.json(resposta_json) # Exibe como JSON formatado
-                    else:
-                        st.markdown(content) # Exibe como texto normal
-                except json.JSONDecodeError:
-                    st.markdown(content) # Se não for JSON válido, exibe como texto normal
-            else: # Mensagem do usuário
-                st.markdown(content)
+def deletar_nota(id_nota: str) -> str:
+    """
+    Deleta uma nota específica do banco de dados Firebase.
+    Args:
+        id_nota (str): O ID da nota a ser deletada.
+    Returns:
+        str: Mensagem de sucesso ou erro.
+    """
+    url_nota = f"{url}{id_nota}.json"
+    try:
+        response = requests.delete(url_nota)
+        if response.status_code == 200:
+            return f"Nota '{id_nota}' deletada com sucesso!"
+        else:
+            return f"Erro ao deletar nota '{id_nota}'. Status: {response.status_code}, Detalhes: {response.text}"
+    except requests.exceptions.RequestException as e:
+        return f"Ocorreu um erro de conexão ao deletar a nota: {e}"
+
+def buscar_notas(termo: str, campo: str = 'titulo') -> str:
+    """
+    Busca notas que contenham um termo específico em um determinado campo e as formata.
+    Args:
+        termo (str): O termo a ser buscado.
+        campo (str): O campo onde a busca será realizada (ex: 'titulo', 'descricao'). Padrão é 'titulo'.
+    Returns:
+        str: Uma string formatada com as notas encontradas ou uma mensagem de "nenhuma nota encontrada".
+    """
+    notas_encontradas = {}
+    todas_notas = listar_notas()
+    if todas_notas:
+        for id_nota, detalhes in todas_notas.items():
+            valor_campo = detalhes.get(campo, '').lower()
+            if termo.lower() in valor_campo:
+                notas_encontradas[id_nota] = detalhes
+    
+    if notas_encontradas:
+        output = f"\n--- Notas Encontradas com '{termo}' no campo '{campo}' ---\n"
+        for id_nota, detalhes in notas_encontradas.items():
+            titulo = detalhes.get('titulo', 'N/A')
+            descricao = detalhes.get('descricao', 'N/A')
+            data = detalhes.get('data', 'N/A')
+            status = detalhes.get('status', 'N/A')
+            data_criacao = detalhes.get('data_criacao', 'N/A')
+            
+            output += f"ID: {id_nota}\n"
+            output += f"  Título: {titulo}\n"
+            output += f"  Descrição: {descricao}\n"
+            output += f"  Data da Tarefa: {data}\n"
+            output += f"  Status: {status}\n"
+            output += f"  Criado em: {data_criacao}\n"
+            output += "--------------------\n"
+        return output
+    else:
+        return f"Nenhuma nota encontrada com o termo '{termo}' no campo '{campo}'."
 
 
-# Campo de entrada para o usuário
-user_input = st.chat_input("Digite sua pergunta ou pedido:")
+@st.cache_resource
+def get_notes_agent(): # Renomeado para refletir o propósito
+    """
+    Cria e retorna a instância do agente de gerenciamento de notas.
+    Usamos st.cache_resource para garantir que o agente seja criado apenas uma vez por sessão do Streamlit.
+    """
+    notes_agent = Agent(
+        name="Gerenciador_de_Notas_AdilsonNeves", # Nome mais apropriado
+        model=MODEL_GEMINI_2_0_FLASH,
+        description=(
+            "Você é um **assistente inteligente e prestativo especializado em gerenciamento de tarefas e notas**."
+            "Sua principal função é ajudar o usuário a **organizar, criar, listar, buscar, atualizar e deletar suas tarefas e lembretes diários ou futuros**."
+            "**Você tem acesso e DEVE usar as seguintes ferramentas para interagir com o banco de dados de notas:**\n"
+            "- **`criar_nota(titulo: str, descricao: str, data: str)`**: Para adicionar uma nova tarefa ou lembrete. O `titulo` é obrigatório. A `data` deve ser fornecida no formato 'DD-MM', 'Hoje' ou 'Amanhã'. Se o usuário não fornecer todos os dados necessários (título, descrição, data), **você DEVE perguntar por eles**.\n"
+            "- **`listar_notas() -> dict`**: Para obter todas as notas do banco de dados. Esta função retorna um dicionário bruto de notas.\n"
+            "- **`exibir_notas() -> str`**: **USE ESTA FERRAMENTA SEMPRE APÓS `listar_notas()` ou para mostrar notas encontradas.** Ela formatará e apresentará as notas listadas de forma legível para o usuário, incluindo o ID de cada nota.\n"
+            "- **`atualizar_campo_tarefa(id_nota: str, campo: str, novo_valor: str)`**: Para modificar um campo específico (como 'titulo', 'descricao', 'data' ou 'status') de uma tarefa existente. **Você DEVE obter o `id_nota` do usuário ou pedir para ele listar as notas primeiro para encontrar o ID**. O `campo` e o `novo_valor` também são necessários.\n"
+            "- **`deletar_nota(id_nota: str)`**: Para remover uma tarefa. **Você DEVE obter o `id_nota` do usuário ou pedir para ele listar as notas primeiro para encontrar o ID**. Peça confirmação antes de deletar, se apropriado.\n"
+            "- **`buscar_notas(termo: str, campo: str = 'titulo') -> str`**: Para encontrar tarefas por palavra-chave no `titulo` ou `descricao`. Retorna uma string formatada com os resultados. Se o usuário não especificar o campo, use 'titulo' como padrão.\n\n"
+            "**Instruções de Comportamento:**\n"
+            "1.  **Prioridade de Memória:** **Você DEVE referenciar informações de conversas anteriores e o estado atual das notas (se for relevante) ao formular suas respostas.** Por exemplo, se o usuário perguntar 'E a nota que criei sobre o relatório ontem?', você deve tentar usar a função de busca ou listar as notas para encontrar e referenciar essa nota.\n"
+            "2.  **Confirmação:** Após criar, atualizar ou deletar uma nota, **você DEVE confirmar a operação com o usuário** usando a mensagem retornada pela ferramenta.\n"
+            "3.  **IDs de Notas:** Para operações de atualização e deleção, **sempre que o usuário não souber o ID da nota, sugira que ele use 'listar notas' ou 'buscar notas' para encontrar o ID primeiro.**\n"
+            "4.  **Clareza:** Seja prestativo, claro e objetivo. Forneça feedback sobre as operações realizadas e os resultados das buscas/listagens.\n"
+            "5.  **Entendimento Contextual:** Esforce-se para entender a intenção do usuário mesmo que as informações não sejam explícitas, usando as ferramentas apropriadas. Por exemplo, se o usuário disser 'Quero adicionar uma tarefa para amanhã: Comprar leite e pão', você deve identificar o título, descrição e data e usar `criar_nota`."
+        ),
+        tools=[criar_nota, listar_notas, exibir_notas, atualizar_campo_tarefa, deletar_nota, buscar_notas],
+    )
+    print(f"Agente '{notes_agent.name}' criado usando o modelo '{MODEL_GEMINI_2_0_FLASH}'.")
+    return notes_agent
 
-if user_input:
+# Inicializa o agente
+notes_agent = get_notes_agent() # Variável renomeada
+
+## Configurações de Sessão ADK e Runner
+APP_NAME = "Gerenciador_Notas_Adilson_Neves" # Nome do aplicativo mais descritivo e sem espaços
+
+@st.cache_resource
+def get_session_service():
+    """
+    Cria e retorna o serviço de sessão.
+    O InMemorySessionService gerencia o histórico da conversa automaticamente para a sessão.
+    """
+    return InMemorySessionService()
+
+session_service = get_session_service()
+
+@st.cache_resource
+def get_adk_runner(_agent, _app_name, _session_service):
+    """
+    Cria e retorna o runner do ADK.
+    """
+    adk_runner = Runner(
+        agent=_agent,
+        app_name=_app_name,
+        session_service=_session_service
+    )
+    print("ADK Runner criado globalmente.")
+    return adk_runner
+
+# Passa o agente de notas para o runner
+adk_runner = get_adk_runner(notes_agent, APP_NAME, session_service) # Passando notes_agent
+
+## Aplicação Streamlit
+
+st.title("📚 Gerenciador de Notas Pessoais") # Título da aplicação atualizado
+
+# Inicializa o histórico de chat no st.session_state se ainda não existir
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# Exibe mensagens anteriores
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# Entrada do usuário
+if user_message := st.chat_input("Olá! Como posso ajudar você a gerenciar suas notas e tarefas hoje?"):
+    # Adiciona a mensagem do usuário ao histórico do Streamlit
+    st.session_state.messages.append({"role": "user", "content": user_message})
     with st.chat_message("user"):
-        st.markdown(user_input)
+        st.markdown(user_message)
 
-    response_text = send_message_to_gemini(user_input)
-    st.rerun() # Força um rerun para exibir a nova mensagem imediatamente
+    # Define user_id e session_id.
+    user_id = "streamlit_user"
+    session_id = "default_streamlit_session"
+
+    try:
+        # Garante que a sessão exista no ADK
+        # O InMemorySessionService manterá o estado da sessão.
+        # Não é ideal tentar criar uma sessão que já existe, mas para InMemorySessionService,
+        # get_session pode ser suficiente para verificar a existência.
+        existing_session = asyncio.run(session_service.get_session(app_name=APP_NAME, user_id=user_id, session_id=session_id))
+        if not existing_session:
+            asyncio.run(session_service.create_session(app_name=APP_NAME, user_id=user_id, session_id=session_id))
+            print(f"Sessão '{session_id}' criada para '{user_id}'.")
+        else:
+            print(f"Sessão '{session_id}' já existe para '{user_id}'.")
+
+        # A nova mensagem do usuário a ser enviada ao agente
+        new_user_content = types.Content(role='user', parts=[types.Part(text=user_message)])
+
+        async def run_agent_and_get_response(current_user_id, current_session_id, new_content):
+            """
+            Executa o agente e retorna a resposta final.
+            """
+            response_text = "Agente não produziu uma resposta final." 
+            async for event in adk_runner.run_async(
+                user_id=current_user_id,
+                session_id=current_session_id,
+                new_message=new_content,
+            ):
+                if event.is_final_response():
+                    if event.content and event.content.parts:
+                        response_text = event.content.parts[0].text
+                    elif event.actions and event.actions.escalate:
+                        response_text = f"Agente escalou: {event.error_message or 'Sem mensagem específica.'}"
+                    break 
+            return response_text
+
+        # Executa a função assíncrona e obtém o resultado
+        response = asyncio.run(run_agent_and_get_response(user_id, session_id, new_user_content))
+
+        # Adiciona a resposta do agente ao histórico do Streamlit
+        st.session_state.messages.append({"role": "assistant", "content": response})
+        with st.chat_message("assistant"):
+            st.markdown(response)
+
+    except Exception as e:
+        st.error(f"Erro ao processar a requisição: {e}")
+        st.session_state.messages.append({"role": "assistant", "content": f"Desculpe, ocorreu um erro: {e}"})
