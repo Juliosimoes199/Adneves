@@ -1,5 +1,6 @@
 import requests
-import datetime
+import json
+import google.generativeai as genai
 import asyncio
 import streamlit as st
 from google.adk.agents import Agent
@@ -7,220 +8,212 @@ from google.adk.sessions import InMemorySessionService # Para protótipo, usar p
 from google.adk.runners import Runner
 from google.genai import types
 import os
-from dotenv import load_dotenv
-import google.generativeai as genai
 import warnings
 import logging
-
-
+import dotenv
 # --- Configurações Iniciais ---
-load_dotenv()
+dotenv.load_dotenv()
 api_key = os.getenv("GOOGLE_API_KEY")
 
-if api_key:
-    genai.configure(api_key=api_key)
-else:
-    st.warning("AVISO: GOOGLE_API_KEY não encontrada no ambiente. Por favor, defina-a ou codifique-a para teste.")
-    genai.configure(api_key="YOUR_HARDCODED_API_KEY_HERE") # CUIDADO: Nunca em produção
+genai.configure(api_key=api_key) # osapi vm
 
-os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "False"
-warnings.filterwarnings("ignore")
-logging.basicConfig(level=logging.ERROR)
-print("Bibliotecas importadas e GenAI configurado.")
 
-MODEL_GEMINI_2_0_FLASH = "gemini-2.0-flash-exp"
 
-url = "https://agendas-adilson-default-rtdb.firebaseio.com/"
 
-# --- Funções de Gerenciamento de Notas ---
-
-def criar_nota(titulo:str, descricao:str, data:str) -> str:
+def registar_paciente(numero_identificacao:str, nome_completo:str, data_nascimento:str, contacto_telefonico:str, id_sexo:int):
     """
-    Cria uma nota no banco de dados Firebase.
+    Regista um novo paciente na unidade hospitalar.
     Args:
-        titulo (str): Título da nota.
-        descricao (str): Descrição da nota.
-        data (str): Data da tarefa no formato "DD-MM", "Amanhã" ou "Hoje".
-    Returns:
-        str: Mensagem de sucesso ou erro.
-    """
-    data_criacao = datetime.datetime.now()
-    nota = {
-        "titulo": titulo,
-        "descricao": descricao,
-        "data": data,
-        "status": "Pendente",
-        "data_criacao": data_criacao.strftime("%Y-%m-%d %H:%M:%S") # Formato completo para data_criacao
-    }
-    try:
-        requisicao = requests.post(url + ".json", json=nota)
-        if requisicao.status_code == 200:
-            return "Nota criada com sucesso!"
-        else:
-            return f"Erro ao criar nota: {requisicao.status_code} - {requisicao.text}"
-    except requests.exceptions.RequestException as e:
-        return f"Ocorreu um erro de conexão ao criar a nota: {e}"
+        numero_identificacao (str): O numero de bilhete do paciente.
+        nome_completo (str): O nome completo do paciente.
+        data_nascimento (str): A data de nascimento do paciente (ex: 1990-01-01).
+        contacto_telefonico (int): O contacto telefonico do paciente.
+        id_sexo (int): O ID do sexo do paciente (1 para masculino, 2 para feminino).
 
-def listar_notas() -> dict:
-    """
-    Lista todas as notas do banco de dados Firebase.
     Returns:
-        dict: Dicionário contendo todas as notas ou None em caso de erro.
+        dict: O JSON da resposta se o login for bem-sucedido e as informações do novo paciente como o id e um dicionário de mais algumas informações uteis, Erro caso contrário.
     """
+    headers = {
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "email": "mlisa@gmail.com",
+        "senha": "mli2025"
+    }
+
     try:
-        requisicao = requests.get(url + ".json")
-        if requisicao.status_code == 200:
-            return requisicao.json()
-        else:
-            print(f"Erro ao listar notas: {requisicao.status_code} - {requisicao.text}")
-            return None
-    except requests.exceptions.RequestException as e:
-        print(f"Ocorreu um erro de conexão ao listar as notas: {e}")
+        url = "https://magnetic-buzzard-osapicare-a83d5229.koyeb.app/auth/local/signin"
+        response = requests.post(url, headers=headers, data=json.dumps(payload))
+        response.raise_for_status()  # Levanta um erro para códigos de status HTTP 4xx/5xx
+
+        #return response.json()
+        resposta_login = response.json()
+        access_token = resposta_login.get("access_token")
+        health_unit_ref = resposta_login.get("health_unit_ref")
+        url_acesso = "https://magnetic-buzzard-osapicare-a83d5229.koyeb.app/pacients"
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+                   }
+        data = {
+            "numero_identificacao": numero_identificacao,
+            "nome_completo": nome_completo,
+            "data_nascimento": data_nascimento,
+            "contacto_telefonico": contacto_telefonico,
+            "id_sexo": id_sexo
+        }
+        requisicao = requests.post(url_acesso, headers=headers, json=data)
+        return {"Status": requisicao.status_code, "Requisição": requisicao.json()}
+
+    except requests.exceptions.HTTPError as http_err:
+        print(f"Erro HTTP: {http_err}")
+        print(f"Resposta do servidor: {response.text}")
+        return None
+    except requests.exceptions.ConnectionError as conn_err:
+        print(f"Erro de Conexão: {conn_err}")
+        return None
+    except requests.exceptions.Timeout as timeout_err:
+        print(f"Erro de Timeout: {timeout_err}")
+        return None
+    except requests.exceptions.RequestException as req_err:
+        print(f"Um erro inesperado ocorreu: {req_err}")
         return None
     
-def exibir_notas() -> str:
+def criar_agendamento(id_paciente:str, id_tipo_exame:int, data_agendamento:str, hora_agendamento:str):
     """
-    Lista todas as notas e as formata em uma string legível.
-    Returns:
-        str: Uma string formatada com todas as notas ou uma mensagem de "nenhuma nota encontrada".
-    """
-    notas = listar_notas()
-    if notas:
-        output = "--- SUAS NOTAS ---\n"
-        for id_nota, detalhes in notas.items():
-            titulo = detalhes.get('titulo', 'N/A')
-            descricao = detalhes.get('descricao', 'N/A')
-            data = detalhes.get('data', 'N/A')
-            status = detalhes.get('status', 'N/A')
-            data_criacao = detalhes.get('data_criacao', 'N/A')
-            
-            output += f"ID: {id_nota}\n"
-            output += f"  Título: {titulo}\n"
-            output += f"  Descrição: {descricao}\n"
-            output += f"  Data da Tarefa: {data}\n"
-            output += f"  Status: {status}\n"
-            output += f"  Criado em: {data_criacao}\n"
-            output += "--------------------\n"
-        return output
-    else:
-        return "Nenhuma nota encontrada."
+    Faz uma requisição de login para a URL fornecida com as credenciais.
 
-def atualizar_campo_tarefa(id_usuario:str, campo:str, novo_valor:str) -> str:
-    """
-    Atualiza um único campo de uma tarefa usando PATCH.
     Args:
-        id_usuario (str): O ID da nota a ser atualizada.
-        campo (str): O nome do campo a ser atualizado (ex: 'titulo', 'descricao', 'status', 'data').
-        novo_valor: O novo valor para o campo.
+        id_paciente (str): O ID do paciente.
+        id_tipo_exame (int): O ID do tipo de exame(ex: 1 para Covide-19, 2 para Hepatite B...).
+        data_agendamento (str): A data do agendamento no formato 'YYYY-MM-DD'.
+        hora_agendamento (str): A hora do agendamento no formato 'HH:MM'.
+
     Returns:
-        str: Mensagem de sucesso ou erro.
+        dict: retorna um dicionário com o status da requisição e a resposta JSON, ou None em caso de erro.
     """
-    url_nova = f"{url}{id_usuario}.json"
-    dados_para_atualizar = {campo: novo_valor}
+    headers = {
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "email": "mlisa@gmail.com",
+        "senha": "mli2025"
+    }
 
     try:
-        response = requests.patch(url_nova, json=dados_para_atualizar)
-        if response.status_code == 200:
-            return f"Campo '{campo}' da tarefa '{id_usuario}' atualizado para '{novo_valor}' com sucesso!"
-        elif response.status_code == 204:
-            return f"Campo '{campo}' da tarefa '{id_usuario}' atualizado para '{novo_valor}' com sucesso! (Sem conteúdo na resposta)"
-        else:
-            return f"Erro ao atualizar o campo '{campo}' da tarefa '{id_usuario}'. Status: {response.status_code}, Detalhes: {response.text}"
-    except requests.exceptions.RequestException as e:
-        return f"Ocorreu um erro de conexão: {e}"
 
-def deletar_nota(id_nota: str) -> str:
-    """
-    Deleta uma nota específica do banco de dados Firebase.
-    Args:
-        id_nota (str): O ID da nota a ser deletada.
-    Returns:
-        str: Mensagem de sucesso ou erro.
-    """
-    url_nota = f"{url}{id_nota}.json"
-    try:
-        response = requests.delete(url_nota)
-        if response.status_code == 200:
-            return f"Nota '{id_nota}' deletada com sucesso!"
-        else:
-            return f"Erro ao deletar nota '{id_nota}'. Status: {response.status_code}, Detalhes: {response.text}"
-    except requests.exceptions.RequestException as e:
-        return f"Ocorreu um erro de conexão ao deletar a nota: {e}"
+        url = "https://magnetic-buzzard-osapicare-a83d5229.koyeb.app/auth/local/signin"
+        response = requests.post(url, headers=headers, data=json.dumps(payload))
+        response.raise_for_status()  # Levanta um erro para códigos de status HTTP 4xx/5xx
 
-def buscar_notas(termo: str, campo: str = 'titulo') -> str:
-    """
-    Busca notas que contenham um termo específico em um determinado campo e as formata.
-    Args:
-        termo (str): O termo a ser buscado.
-        campo (str): O campo onde a busca será realizada (ex: 'titulo', 'descricao'). Padrão é 'titulo'.
-    Returns:
-        str: Uma string formatada com as notas encontradas ou uma mensagem de "nenhuma nota encontrada".
-    """
-    notas_encontradas = {}
-    todas_notas = listar_notas()
-    if todas_notas:
-        for id_nota, detalhes in todas_notas.items():
-            valor_campo = detalhes.get(campo, '').lower()
-            if termo.lower() in valor_campo:
-                notas_encontradas[id_nota] = detalhes
+        #return response.json()
+        resposta_login = response.json()
+        access_token = resposta_login.get("access_token")
+        health_unit_ref = resposta_login.get("health_unit_ref")
+        url_acesso = "https://magnetic-buzzard-osapicare-a83d5229.koyeb.app/schedulings/set-schedule"
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+                   }
+        data = {
+            "id_paciente": id_paciente,
+            "id_unidade_de_saude": health_unit_ref,
+            "exames_paciente": [
+        {
+            "id_tipo_exame": id_tipo_exame,
+            "data_agendamento": data_agendamento,
+            "hora_agendamento": hora_agendamento
+        }]
+
+        }
+        requisicao = requests.post(url_acesso, headers=headers, json=data)
+        return {"Status": requisicao.status_code, "Requisição": requisicao.json()}
+
+    except requests.exceptions.HTTPError as http_err:
+        print(f"Erro HTTP: {http_err}")
+        print(f"Resposta do servidor: {response.text}")
+        return None
+    except requests.exceptions.ConnectionError as conn_err:
+        print(f"Erro de Conexão: {conn_err}")
+        return None
+    except requests.exceptions.Timeout as timeout_err:
+        print(f"Erro de Timeout: {timeout_err}")
+        return None
+    except requests.exceptions.RequestException as req_err:
+        print(f"Um erro inesperado ocorreu: {req_err}")
+        return None
     
-    if notas_encontradas:
-        output = f"\n--- Notas Encontradas com '{termo}' no campo '{campo}' ---\n"
-        for id_nota, detalhes in notas_encontradas.items():
-            titulo = detalhes.get('titulo', 'N/A')
-            descricao = detalhes.get('descricao', 'N/A')
-            data = detalhes.get('data', 'N/A')
-            status = detalhes.get('status', 'N/A')
-            data_criacao = detalhes.get('data_criacao', 'N/A')
-            
-            output += f"ID: {id_nota}\n"
-            output += f"  Título: {titulo}\n"
-            output += f"  Descrição: {descricao}\n"
-            output += f"  Data da Tarefa: {data}\n"
-            output += f"  Status: {status}\n"
-            output += f"  Criado em: {data_criacao}\n"
-            output += "--------------------\n"
-        return output
-    else:
-        return f"Nenhuma nota encontrada com o termo '{termo}' no campo '{campo}'."
+def get_exames():
+    """
+    Faz uma requisição para obter o id correspondente ao tipo de exame, o nome dos exames e descrição dos tipos de exames disponíveis.
 
 
+    Returns:
+        dict: retorna um dicionário com o status da requisição e a resposta JSON, ou None em caso de erro.
+    """
+    headers = {
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "email": "mlisa@gmail.com",
+        "senha": "mli2025"
+    }
+
+    try:
+        url = "https://magnetic-buzzard-osapicare-a83d5229.koyeb.app/auth/local/signin"
+        response = requests.post(url, headers=headers, data=json.dumps(payload))
+        response.raise_for_status()  # Levanta um erro para códigos de status HTTP 4xx/5xx
+
+        #return response.json()
+        resposta_login = response.json()
+        access_token = resposta_login.get("access_token")
+        health_unit_ref = resposta_login.get("health_unit_ref")
+        url_acesso = "https://magnetic-buzzard-osapicare-a83d5229.koyeb.app/exam-types"
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+                   }
+
+        requisicao = requests.get(url_acesso, headers=headers)
+        return {"Status": requisicao.status_code, "Requisição": requisicao.json()}
+
+    except requests.exceptions.HTTPError as http_err:
+        print(f"Erro HTTP: {http_err}")
+        print(f"Resposta do servidor: {response.text}")
+        return None
+    except requests.exceptions.ConnectionError as conn_err:
+        print(f"Erro de Conexão: {conn_err}")
+        return None
+    except requests.exceptions.Timeout as timeout_err:
+        print(f"Erro de Timeout: {timeout_err}")
+        return None
+    except requests.exceptions.RequestException as req_err:
+        print(f"Um erro inesperado ocorreu: {req_err}")
+        return None
+    
 @st.cache_resource
-def get_notes_agent(): # Renomeado para refletir o propósito
-    """
-    Cria e retorna a instância do agente de gerenciamento de notas.
-    Usamos st.cache_resource para garantir que o agente seja criado apenas uma vez por sessão do Streamlit.
-    """
-    notes_agent = Agent(
-        name="Gerenciador_de_Notas_AdilsonNeves", # Nome mais apropriado
-        model=MODEL_GEMINI_2_0_FLASH,
-        description=(
-            "Você é um **assistente inteligente e prestativo especializado em gerenciamento de tarefas e notas**."
-            "Sua principal função é ajudar o usuário a **organizar, criar, listar, buscar, atualizar e deletar suas tarefas e lembretes diários ou futuros**."
-            "**Você tem acesso e DEVE usar as seguintes ferramentas para interagir com o banco de dados de notas:**\n"
-            "- **`criar_nota(titulo: str, descricao: str, data: str)`**: Para adicionar uma nova tarefa ou lembrete. O `titulo` é obrigatório. A `data` deve ser fornecida no formato 'DD-MM', 'Hoje' ou 'Amanhã'. Se o usuário não fornecer todos os dados necessários (título, descrição, data), **você DEVE perguntar por eles**.\n"
-            "- **`listar_notas() -> dict`**: Para obter todas as notas do banco de dados. Esta função retorna um dicionário bruto de notas.\n"
-            "- **`exibir_notas() -> str`**: **USE ESTA FERRAMENTA SEMPRE APÓS `listar_notas()` ou para mostrar notas encontradas.** Ela formatará e apresentará as notas listadas de forma legível para o usuário, incluindo o ID de cada nota.\n"
-            "- **`atualizar_campo_tarefa(id_nota: str, campo: str, novo_valor: str)`**: Para modificar um campo específico (como 'titulo', 'descricao', 'data' ou 'status') de uma tarefa existente. **Você DEVE obter o `id_nota` do usuário ou pedir para ele listar as notas primeiro para encontrar o ID**. O `campo` e o `novo_valor` também são necessários.\n"
-            "- **`deletar_nota(id_nota: str)`**: Para remover uma tarefa. **Você DEVE obter o `id_nota` do usuário ou pedir para ele listar as notas primeiro para encontrar o ID**. Peça confirmação antes de deletar, se apropriado.\n"
-            "- **`buscar_notas(termo: str, campo: str = 'titulo') -> str`**: Para encontrar tarefas por palavra-chave no `titulo` ou `descricao`. Retorna uma string formatada com os resultados. Se o usuário não especificar o campo, use 'titulo' como padrão.\n\n"
-            "**Instruções de Comportamento:**\n"
-            "1.  **Prioridade de Memória:** **Você DEVE referenciar informações de conversas anteriores e o estado atual das notas (se for relevante) ao formular suas respostas.** Por exemplo, se o usuário perguntar 'E a nota que criei sobre o relatório ontem?', você deve tentar usar a função de busca ou listar as notas para encontrar e referenciar essa nota.\n"
-            "2.  **Confirmação:** Após criar, atualizar ou deletar uma nota, **você DEVE confirmar a operação com o usuário** usando a mensagem retornada pela ferramenta.\n"
-            "3.  **IDs de Notas:** Para operações de atualização e deleção, **sempre que o usuário não souber o ID da nota, sugira que ele use 'listar notas' ou 'buscar notas' para encontrar o ID primeiro.**\n"
-            "4.  **Clareza:** Seja prestativo, claro e objetivo. Forneça feedback sobre as operações realizadas e os resultados das buscas/listagens.\n"
-            "5.  **Entendimento Contextual:** Esforce-se para entender a intenção do usuário mesmo que as informações não sejam explícitas, usando as ferramentas apropriadas. Por exemplo, se o usuário disser 'Quero adicionar uma tarefa para amanhã: Comprar leite e pão', você deve identificar o título, descrição e data e usar `criar_nota`."
-        ),
-        tools=[criar_nota, listar_notas, exibir_notas, atualizar_campo_tarefa, deletar_nota, buscar_notas],
+def agent_osapi():
+    root_agent = Agent(
+        name = "osapicare",
+        #model="gemini-2.0-flash-exp",
+        model= "gemini-2.0-flash-exp",
+        # Combine a descrição e as instruções aqui, ou adicione um novo campo se o ADK suportar explicitamente instruções do sistema
+        description="""
+        Você é um **assistente inteligente e prestativo especializado em gestão de dos processos laboratorias da plataforma OsapiCare, você torna as actividades laboratoriais mas simples e fácil de ser realizado**.
+        Você pode ajudar os usuários a **registar pacientes, agendar exames e obter informações sobre tipos de exames disponíveis**.
+        Você pode usar as seguintes ferramentas:
+        - **registar_paciente**: Registra um novo paciente na unidade hospitalar.
+        - **criar_agendamento**: Cria um agendamento de exame para um paciente.
+        - **get_exames**: Obtém os tipos de exames disponíveis, incluindo o ID, nome e descrição dos exames para ser usado na criação de novo agendamento.
+        """,
+        tools=[registar_paciente,criar_agendamento, get_exames],  # Certifique-se de que essas ferramentas estejam definidas corretamente
+        # Se houver um campo para instruções específicas do modelo, ele seria algo como 'system_instruction' ou 'model_instructions'
+        # system_instruction="""Siga as diretrizes de segurança e bem-estar do usuário.""" # Exemplo, verifique a documentação do ADK
     )
-    print(f"Agente '{notes_agent.name}' criado usando o modelo '{MODEL_GEMINI_2_0_FLASH}'.")
-    return notes_agent
+    print(f"Agente '{root_agent.name}'.")
+    return root_agent
 
-# Inicializa o agente
-notes_agent = get_notes_agent() # Variável renomeada
+root_agent = agent_osapi()
 
-## Configurações de Sessão ADK e Runner
-APP_NAME = "Gerenciador_Notas_Adilson_Neves" # Nome do aplicativo mais descritivo e sem espaços
+APP_NAME = "OSAPICARE"
+
 
 @st.cache_resource
 def get_session_service():
@@ -246,11 +239,11 @@ def get_adk_runner(_agent, _app_name, _session_service):
     return adk_runner
 
 # Passa o agente de notas para o runner
-adk_runner = get_adk_runner(notes_agent, APP_NAME, session_service) # Passando notes_agent
+adk_runner = get_adk_runner(root_agent, APP_NAME, session_service) # Passando notes_agent
 
 ## Aplicação Streamlit
 
-st.title("📚 Gerenciador de Notas Pessoais") # Título da aplicação atualizado
+st.title("🩺 Gerenciador laboratorial") # Título da aplicação atualizado
 
 # Inicializa o histórico de chat no st.session_state se ainda não existir
 if "messages" not in st.session_state:
@@ -262,15 +255,15 @@ for message in st.session_state.messages:
         st.markdown(message["content"])
 
 # Entrada do usuário
-if user_message := st.chat_input("Olá! Como posso ajudar você a gerenciar suas notas e tarefas hoje?"):
+if user_message := st.chat_input("Olá! Como posso ajudar você a gerenciar suas actividades hoje?"):
     # Adiciona a mensagem do usuário ao histórico do Streamlit
     st.session_state.messages.append({"role": "user", "content": user_message})
     with st.chat_message("user"):
         st.markdown(user_message)
 
     # Define user_id e session_id.
-    user_id = "streamlit_user"
-    session_id = "default_streamlit_session"
+    user_id = "streamlit_usuario"
+    session_id = "default_streamlit_usuario"
 
     try:
         # Garante que a sessão exista no ADK
