@@ -188,6 +188,55 @@ def get_exames():
         print(f"Um erro inesperado ocorreu: {req_err}")
         return None
     
+
+def get_pacientes():
+    """
+    Faz uma requisição para obter os dados pessoais dos pacientes, como nome, id do paciente, sexo, número telefónico e data de nascimento.
+
+
+    Returns:
+        dict: retorna um dicionário com o status da requisição e a resposta JSON, ou None em caso de erro.
+    """
+    headers = {
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "email": "mlisa@gmail.com",
+        "senha": "mli2025"
+    }
+
+    try:
+        url = "https://magnetic-buzzard-osapicare-a83d5229.koyeb.app/auth/local/signin"
+        response = requests.post(url, headers=headers, data=json.dumps(payload))
+        response.raise_for_status()  # Levanta um erro para códigos de status HTTP 4xx/5xx
+
+        #return response.json()
+        resposta_login = response.json()
+        access_token = resposta_login.get("access_token")
+        health_unit_ref = resposta_login.get("health_unit_ref")
+        url_acesso = "https://magnetic-buzzard-osapicare-a83d5229.koyeb.app/pacients"
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+                   }
+
+        requisicao = requests.get(url_acesso, headers=headers)
+        return {"Status": requisicao.status_code, "Requisição": requisicao.json()}
+
+    except requests.exceptions.HTTPError as http_err:
+        print(f"Erro HTTP: {http_err}")
+        print(f"Resposta do servidor: {response.text}")
+        return None
+    except requests.exceptions.ConnectionError as conn_err:
+        print(f"Erro de Conexão: {conn_err}")
+        return None
+    except requests.exceptions.Timeout as timeout_err:
+        print(f"Erro de Timeout: {timeout_err}")
+        return None
+    except requests.exceptions.RequestException as req_err:
+        print(f"Um erro inesperado ocorreu: {req_err}")
+        return None
+
+    
 @st.cache_resource
 def agent_osapi():
     root_agent = Agent(
@@ -202,8 +251,11 @@ def agent_osapi():
         - **registar_paciente**: Registra um novo paciente na unidade hospitalar.
         - **criar_agendamento**: Cria um agendamento de exame para um paciente.
         - **get_exames**: Obtém os tipos de exames disponíveis, incluindo o ID, nome e descrição dos exames para ser usado na criação de novo agendamento.
+        - **get_pacientes**: Obtém os dados pessoais dos pacientes, como nome, id do paciente, sexo, número telefónico e data de nascimento.
+        Você deve sempre responder de forma clara e concisa, e se não souber a resposta, deve informar o usuário que não tem certeza.
+        Se o usuário fizer uma pergunta que não esteja relacionada com a gestão de processos laboratoriais, você deve informar que não pode ajudar com isso.
         """,
-        tools=[registar_paciente,criar_agendamento, get_exames],  # Certifique-se de que essas ferramentas estejam definidas corretamente
+        tools=[registar_paciente,criar_agendamento, get_exames, get_pacientes],  # Certifique-se de que essas ferramentas estejam definidas corretamente
         # Se houver um campo para instruções específicas do modelo, ele seria algo como 'system_instruction' ou 'model_instructions'
         # system_instruction="""Siga as diretrizes de segurança e bem-estar do usuário.""" # Exemplo, verifique a documentação do ADK
     )
