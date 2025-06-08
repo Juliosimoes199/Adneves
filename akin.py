@@ -144,8 +144,7 @@ def criar_agendamento(id_paciente:str, id_tipo_exame:int, data_agendamento:str, 
 def get_exames():
     """
     Faz uma requisição para obter o id correspondente ao tipo de exame, o nome dos exames e descrição dos tipos de exames disponíveis.
-
-
+    Essa função é uma ferramenta interna que nunca deve ser exposta ao usuário, apenas utilizada para extrair informações como o id correspondente ao tipo de exame para o preencher a variável id_tipo_exame na função criar_agendamento.
     Returns:
         dict: retorna um dicionário com o status da requisição e a resposta JSON, ou None em caso de erro.
     """
@@ -192,8 +191,11 @@ def get_exames():
 def get_pacientes():
     """
     Faz uma requisição para obter os dados pessoais dos pacientes, como nome, id do paciente, sexo, número telefónico e data de nascimento.
-
-
+    Essa função é uma ferramenta interna que nunca deve ser exposta ao usuário, apenas utilizada para extrair informações necessárias no momento.
+    
+    Args:
+        None
+    
     Returns:
         dict: retorna um dicionário com o status da requisição e a resposta JSON, ou None em caso de erro.
     """
@@ -236,6 +238,16 @@ def get_pacientes():
         print(f"Um erro inesperado ocorreu: {req_err}")
         return None
 
+def get_user():
+    """
+    Obtém o link da página de pacientes da plataforma OsapiCare.
+    Essa função deve ser usada para acessar a lista de pacientes registrados na unidade hospitalar.
+    Args:
+        None
+    Returns:
+        str: O link da página de pacientes. 
+    """
+    return {"Link":"https://akin-lis-app-web.vercel.app/akin/patient"}
     
 @st.cache_resource
 def agent_osapi():
@@ -251,11 +263,14 @@ def agent_osapi():
         - **registar_paciente**: Registra um novo paciente na unidade hospitalar.
         - **criar_agendamento**: Cria um agendamento de exame para um paciente.
         - **get_exames**: Obtém os tipos de exames disponíveis, incluindo o ID, nome e descrição dos exames para ser usado na criação de novo agendamento.
-        - **get_pacientes**: Obtém os dados pessoais dos pacientes, como nome, id do paciente, sexo, número telefónico e data de nascimento.
+        - **get_pacientes**: Obtém os dados pessoais dos pacientes, como nome, id do paciente, sexo, número telefónico e data de nascimento, que deveras utilizar quando necessário para extrair alguma informação necessária no momento e nunca mostres aos usuário, essa é uma ferramenta tua interna que nunca deve ser exposta.
+        - **get_user**: Obtém o link da página de pacientes da plataforma OsapiCare, que pode ser usado para acessar a lista de pacientes registrados na unidade hospitalar.
+        Sempre que o usuário quiser agendar um exame, você deve primeiro obter o ID do tipo de exame usando a ferramenta **get_exames** e depois usar o ID do paciente e o ID do tipo de exame para criar o agendamento com a ferramenta **criar_agendamento**, nunca pessa permissão para usar a função **get_exames** sempre use para obter o id do tipo de exame a partir do nome do tipo de exame que o usuário quiser agendar.
+        Você deve sempre verificar se o paciente já está registrado antes de criar um agendamento, usando a ferramenta **get_pacientes** para obter os dados dos pacientes.
         Você deve sempre responder de forma clara e concisa, e se não souber a resposta, deve informar o usuário que não tem certeza.
         Se o usuário fizer uma pergunta que não esteja relacionada com a gestão de processos laboratoriais, você deve informar que não pode ajudar com isso.
         """,
-        tools=[registar_paciente,criar_agendamento, get_exames, get_pacientes],  # Certifique-se de que essas ferramentas estejam definidas corretamente
+        tools=[registar_paciente,criar_agendamento, get_exames, get_pacientes, get_user],  # Certifique-se de que essas ferramentas estejam definidas corretamente
         # Se houver um campo para instruções específicas do modelo, ele seria algo como 'system_instruction' ou 'model_instructions'
         # system_instruction="""Siga as diretrizes de segurança e bem-estar do usuário.""" # Exemplo, verifique a documentação do ADK
     )
