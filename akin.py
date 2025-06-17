@@ -37,8 +37,8 @@ def registar_paciente(numero_identificacao:str, nome_completo:str, data_nascimen
         "Content-Type": "application/json"
     }
     payload = {
-        "email": "steka@gmail.com",
-        "senha": "ste2025"
+        "email": "mlisa@gmail.com",
+        "senha": "mli2025"
     }
 
     try:
@@ -95,8 +95,8 @@ def criar_agendamento(id_paciente:str, id_tipo_exame:int, data_agendamento:str, 
         "Content-Type": "application/json"
     }
     payload = {
-        "email": "steka@gmail.com",
-        "senha": "ste2025"
+        "email": "mlisa@gmail.com",
+        "senha": "mli2025"
     }
 
     try:
@@ -152,8 +152,8 @@ def get_exames():
         "Content-Type": "application/json"
     }
     payload = {
-        "email": "steka@gmail.com",
-        "senha": "ste2025"
+        "email": "mlisa@gmail.com",
+        "senha": "mli2025"
     }
 
     try:
@@ -203,8 +203,8 @@ def get_pacientes():
         "Content-Type": "application/json"
     }
     payload = {
-        "email": "steka@gmail.com",
-        "senha": "ste2025"
+        "email": "mlisa@gmail.com",
+        "senha": "mli2025"
     }
 
     try:
@@ -268,8 +268,8 @@ def lista_exames_por_pacientes(id_paciente:str):
         "Content-Type": "application/json"
     }
     payload = {
-        "email": "steka@gmail.com",
-        "senha": "ste2025"
+        "email": "mlisa@gmail.com",
+        "senha": "mli2025"
     }
 
     try:
@@ -331,8 +331,8 @@ def editar_exames(id_exame:str, id_agendamento:str, data_agendamento:None, hora_
         "Content-Type": "application/json"
     }
     payload = {
-        "email": "steka@gmail.com",
-        "senha": "ste2025"
+        "email": "mlisa@gmail.com",
+        "senha": "mli2025"
     }
 
     try:
